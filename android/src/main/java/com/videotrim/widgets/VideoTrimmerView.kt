@@ -52,6 +52,8 @@ import com.videotrim.utils.VideoTrimmerUtil
 import com.videotrim.utils.VideoTrimmerUtil.RECYCLER_VIEW_PADDING
 import com.videotrim.utils.VideoTrimmerUtil.VIDEO_FRAMES_WIDTH
 
+import android.widget.EditText
+
 import iknow.android.utils.DeviceUtil
 import iknow.android.utils.thread.BackgroundExecutor
 import iknow.android.utils.thread.UiThreadExecutor
@@ -214,6 +216,9 @@ class VideoTrimmerView(
   private lateinit var speedBtn: TextView
   private lateinit var videoContainer: FrameLayout
   private var cropOverlay: CropOverlayView? = null
+  private lateinit var textBtn: TextView
+private var textOverlay: TextOverlayView? = null
+private var nextTextId = 1L
 
   internal var isMuted = false
     private set
@@ -249,6 +254,7 @@ class VideoTrimmerView(
     initializeViews()
     if (config != null) configure(config)
     setUpListeners()
+    initTextTool()
     initRangeDragDetector()
     setProgressIndicatorTouchListener()
   }
@@ -836,6 +842,8 @@ class VideoTrimmerView(
     cropOverlay?.onCropEnded = null
     cropOverlay?.onCropChanged = null
     cropOverlay = null
+    textOverlay = null
+    textOverlay?.onItemTap = null
     undoStack.clear()
     redoStack.clear()
     cumulativeRotationDeg = 0f
@@ -1067,6 +1075,7 @@ class VideoTrimmerView(
     }
 
     currentTimeText.text = formatTime(currentPosition)
+    textOverlay?.setCurrentMs(currentPosition.toLong())
     startTimeText.text = formatTime(startTime.toInt())
     endTimeText.text = formatTime(endTime.toInt())
 
@@ -2343,7 +2352,60 @@ class VideoTrimmerView(
   }
 
   // endregion
+private fun initTextTool() {
+  textBtn = findViewById(R.id.textBtn)
+  textBtn.setOnClickListener { showTextDialog(null) }
+}
 
+private fun ensureTextOverlay(): TextOverlayView {
+  textOverlay?.let { return it }
+  val overlay = TextOverlayView(mContext)
+  overlay.layoutParams = FrameLayout.LayoutParams(
+    FrameLayout.LayoutParams.MATCH_PARENT,
+    FrameLayout.LayoutParams.MATCH_PARENT
+  )
+  overlay.rectProvider = { getVideoDisplayRectInContainer() }
+  overlay.onItemTap = { item -> showTextDialog(item) }
+  videoContainer.addView(overlay)
+  textOverlay = overlay
+  return overlay
+}
+
+private fun showTextDialog(existing: TextItem?) {
+  val activity = mContext.currentActivity ?: return
+  val overlay = ensureTextOverlay()
+  val input = EditText(activity)
+  input.setSingleLine()
+  input.setText(existing?.text ?: "")
+  input.setSelection(input.text.length)
+  val builder = android.app.AlertDialog.Builder(activity)
+    .setTitle(if (existing == null) "Add text" else "Edit text")
+    .setView(input)
+    .setPositiveButton(android.R.string.ok) { _, _ ->
+      val t = input.text.toString().trim()
+      if (t.isNotEmpty()) {
+        if (existing != null) {
+          existing.text = t
+          overlay.invalidate()
+        } else {
+          addTextItem(overlay, t)
+        }
+      }
+    }
+    .setNegativeButton(android.R.string.cancel, null)
+  if (existing != null) {
+    builder.setNeutralButton("Delete") { _, _ -> overlay.removeItem(existing.id) }
+  }
+  builder.show()
+}
+
+private fun addTextItem(overlay: TextOverlayView, text: String) {
+  val now = (mediaPlayer?.currentPosition ?: 0).toLong()
+  val s = if (now >= startTime && now < endTime - 500) now else startTime
+  val e = minOf(endTime, s + 3000L)
+  overlay.addItem(TextItem(id = nextTextId++, text = text, startMs = s, endMs = e))
+  overlay.setCurrentMs(now)
+}
   // region Undo / Redo
 
   private fun currentSnapshot(): TransformSnapshot {
