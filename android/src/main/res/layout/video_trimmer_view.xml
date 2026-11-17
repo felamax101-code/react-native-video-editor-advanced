@@ -294,10 +294,10 @@
   android:layout_marginHorizontal="16dp"
   android:visibility="gone" />
     <FrameLayout
-      android:layout_below="@+id/textRangeHolder"
+      android:id="@+id/trimmerView"
       android:layout_width="match_parent"
       android:layout_height="50dp"
-      android:layout_below="@+id/trimmerView"
+      android:layout_below="@+id/textRangeHolder"
       android:layout_marginHorizontal="16dp"
       android:orientation="horizontal"
       android:visibility="visible">
