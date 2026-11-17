@@ -8,7 +8,6 @@ buildscript {
         kotlinVersion = "2.0.21"
         VideoTrim_ffmpeg_package = 'https'
     }
-    
     repositories {
         google()
         mavenCentral()
