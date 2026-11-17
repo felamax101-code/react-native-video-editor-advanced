@@ -195,6 +195,14 @@ class VideoTrimmerView(
   private var isCropActive = false
   private var cumulativeRotationDeg = 0f
 
+private data class TransformSnapshot(
+  val rotationCount: Int,
+  val isFlipped: Boolean,
+  val isCropActive: Boolean,
+  val cropNormalized: RectF?,
+  val cumulativeRotationDeg: Float,
+  val texts: List<TextState> = emptyList()
+)
   private data class TransformSnapshot(
     val rotationCount: Int,
     val isFlipped: Boolean,
@@ -219,6 +227,9 @@ class VideoTrimmerView(
   private lateinit var textBtn: TextView
 private var textOverlay: TextOverlayView? = null
 private var nextTextId = 1L
+private lateinit var textRangeHolder: FrameLayout
+private var textRangeBar: TextRangeBarView? = null
+private var committedTexts: List<TextState> = emptyList()
 
   internal var isMuted = false
     private set
@@ -842,6 +853,11 @@ private var nextTextId = 1L
     cropOverlay?.onCropEnded = null
     cropOverlay?.onCropChanged = null
     cropOverlay = null
+    textOverlay?.onChanged = null
+textOverlay?.onSelectionChanged = null
+textRangeBar?.onChanged = null
+textRangeBar?.onChanging = null
+textRangeBar = null
     textOverlay = null
     textOverlay?.onItemTap = null
     undoStack.clear()
@@ -1076,6 +1092,7 @@ private var nextTextId = 1L
 
     currentTimeText.text = formatTime(currentPosition)
     textOverlay?.setCurrentMs(currentPosition.toLong())
+    textRangeBar?.setCurrentMs(currentPosition.toLong())
     startTimeText.text = formatTime(startTime.toInt())
     endTimeText.text = formatTime(endTime.toInt())
 
@@ -2352,9 +2369,24 @@ private var nextTextId = 1L
   }
 
   // endregion
+
+
 private fun initTextTool() {
   textBtn = findViewById(R.id.textBtn)
   textBtn.setOnClickListener { showTextDialog(null) }
+
+  textRangeHolder = findViewById(R.id.textRangeHolder)
+  val bar = TextRangeBarView(mContext)
+  bar.accentColor = trimmerColor
+  bar.layoutParams = FrameLayout.LayoutParams(
+    FrameLayout.LayoutParams.MATCH_PARENT,
+    FrameLayout.LayoutParams.MATCH_PARENT
+  )
+  bar.rangeProvider = { startTime to endTime }
+  bar.onChanging = { textOverlay?.invalidate() }
+  bar.onChanged = { textOverlay?.invalidate(); commitTextChange() }
+  textRangeHolder.addView(bar)
+  textRangeBar = bar
 }
 
 private fun ensureTextOverlay(): TextOverlayView {
@@ -2366,6 +2398,8 @@ private fun ensureTextOverlay(): TextOverlayView {
   )
   overlay.rectProvider = { getVideoDisplayRectInContainer() }
   overlay.onItemTap = { item -> showTextDialog(item) }
+  overlay.onChanged = { textRangeBar?.invalidate(); commitTextChange() }
+  overlay.onSelectionChanged = { item -> showTextBar(item) }
   videoContainer.addView(overlay)
   textOverlay = overlay
   return overlay
@@ -2383,14 +2417,14 @@ private fun showTextDialog(existing: TextItem?) {
     .setView(input)
     .setPositiveButton(android.R.string.ok) { _, _ ->
       val t = input.text.toString().trim()
-      if (t.isNotEmpty()) {
-        if (existing != null) {
-          existing.text = t
-          overlay.invalidate()
-        } else {
-          addTextItem(overlay, t)
-        }
-      }
+     if (existing != null) {
+  existing.text = t
+  overlay.invalidate()
+  textRangeBar?.invalidate()
+  commitTextChange()
+} else {
+  addTextItem(overlay, t)
+}
     }
     .setNegativeButton(android.R.string.cancel, null)
   if (existing != null) {
@@ -2406,6 +2440,35 @@ private fun addTextItem(overlay: TextOverlayView, text: String) {
   overlay.addItem(TextItem(id = nextTextId++, text = text, startMs = s, endMs = e))
   overlay.setCurrentMs(now)
 }
+
+private fun showTextBar(item: TextItem?) {
+  val bar = textRangeBar ?: return
+  bar.item = item
+  val target = if (item != null) android.view.View.VISIBLE else android.view.View.GONE
+  if (textRangeHolder.visibility != target) {
+    textRangeHolder.visibility = target
+    // The bottom panel changed height, so the video area changed too.
+    videoContainer.post { updateCropAllowedRect() }
+  }
+}
+
+private fun commitTextChange() {
+  val now = textOverlay?.snapshotStates() ?: emptyList()
+  if (now == committedTexts) return
+  undoStack.add(currentSnapshot().copy(texts = committedTexts))
+  redoStack.clear()
+  committedTexts = now
+  updateUndoRedoButtons()
+}
+
+private fun restoreTexts(states: List<TextState>) {
+  if (states.isEmpty() && textOverlay == null) {
+    committedTexts = emptyList()
+    return
+  }
+  ensureTextOverlay().restoreStates(states)
+  committedTexts = states
+}
   // region Undo / Redo
 
   private fun currentSnapshot(): TransformSnapshot {
@@ -2414,7 +2477,9 @@ private fun addTextItem(overlay: TextOverlayView, text: String) {
       isFlipped = isFlipped,
       isCropActive = isCropActive,
       cropNormalized = getCropNormalizedRect(),
-      cumulativeRotationDeg = cumulativeRotationDeg
+      cumulativeRotationDeg = cumulativeRotationDeg,
+      cumulativeRotationDeg = cumulativeRotationDeg,
+texts = textOverlay?.snapshotStates() ?: emptyList()
     )
   }
 
@@ -2441,6 +2506,7 @@ private fun addTextItem(overlay: TextOverlayView, text: String) {
   }
 
   private fun applySnapshot(snap: TransformSnapshot) {
+    restoreTexts(snap.texts)
     val flipChanging = isFlipped != snap.isFlipped
     val prevRotationCount = rotationCount
 

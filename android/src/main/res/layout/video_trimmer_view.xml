@@ -180,6 +180,7 @@
         android:layout_gravity="center"
         android:contentDescription="Airpods Max"
         android:src="@drawable/airpodsmax" />
+        
     </FrameLayout>
   </FrameLayout>
 
@@ -285,9 +286,15 @@
         </FrameLayout>
       </RelativeLayout>
     </RelativeLayout>
-
+<FrameLayout
+  android:id="@+id/textRangeHolder"
+  android:layout_width="match_parent"
+  android:layout_height="44dp"
+  android:layout_below="@+id/trimmerView"
+  android:layout_marginHorizontal="16dp"
+  android:visibility="gone" />
     <FrameLayout
-      android:id="@+id/timingStackView"
+      android:layout_below="@+id/textRangeHolder"
       android:layout_width="match_parent"
       android:layout_height="50dp"
       android:layout_below="@+id/trimmerView"

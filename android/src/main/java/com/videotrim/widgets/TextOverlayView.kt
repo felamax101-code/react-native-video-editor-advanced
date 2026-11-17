@@ -31,7 +31,10 @@ class TextItem(
   var rotationDeg: Float = 0f,
   var color: Int = Color.WHITE
 )
-
+data class TextState(
+  val id: Long, val text: String, val startMs: Long, val endMs: Long,
+  val cx: Float, val cy: Float, val scale: Float, val rotationDeg: Float, val color: Int
+)
 class TextOverlayView(context: Context) : View(context) {
 
   companion object {
@@ -79,7 +82,20 @@ class TextOverlayView(context: Context) : View(context) {
     onChanged?.invoke()
     invalidate()
   }
+fun snapshotStates(): List<TextState> =
+  items.map { TextState(it.id, it.text, it.startMs, it.endMs, it.cx, it.cy, it.scale, it.rotationDeg, it.color) }
+    .sortedBy { it.id }
 
+fun restoreStates(states: List<TextState>) {
+  val keep = selectedId
+  items.clear()
+  for (s in states) {
+    items.add(TextItem(s.id, s.text, s.startMs, s.endMs, s.cx, s.cy, s.scale, s.rotationDeg, s.color))
+  }
+  selectedId = if (items.any { it.id == keep }) keep else -1L
+  onSelectionChanged?.invoke(selectedItem())
+  invalidate()
+}
   fun selectedItem(): TextItem? = items.firstOrNull { it.id == selectedId }
 
   private fun select(id: Long) {
