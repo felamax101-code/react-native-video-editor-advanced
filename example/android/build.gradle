@@ -8,6 +8,11 @@ buildscript {
         kotlinVersion = "2.0.21"
         VideoTrim_ffmpeg_package = 'https'
     }
+    react {
+    reactNativeDir = file("../../../node_modules/react-native")
+    codegenDir = file("../../../node_modules/@react-native/codegen")
+    cliFile = file("../../../node_modules/react-native/cli.js")
+}
     repositories {
         google()
         mavenCentral()
