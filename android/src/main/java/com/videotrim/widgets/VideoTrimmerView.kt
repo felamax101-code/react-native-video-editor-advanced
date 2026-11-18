@@ -841,7 +841,7 @@ class VideoTrimmerView(
                 speed,
                 mOnTrimVideoListener,
                 texts = buildTextExports()
-    )
+    
             )
     }
 
