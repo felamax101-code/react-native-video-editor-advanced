@@ -21,7 +21,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.TimeZone
 import kotlin.math.roundToInt
-
+import java.io.File
+import java.util.Locale
 /**
  * Handle returned from FFmpeg trim invocations that own an encoder-fallback chain.
  *
@@ -43,7 +44,14 @@ class TrimSession {
     currentSession?.cancel()
   }
 }
-
+/** One rendered text overlay. startMs/endMs are absolute source times; cx/cy are fractions of the post-rotate/flip frame. */
+class TextOverlayExport(
+  val pngPath: String,
+  val startMs: Long,
+  val endMs: Long,
+  val cx: Float,
+  val cy: Float
+)
 object VideoTrimmerUtil {
 
   private val TAG: String = VideoTrimmerUtil::class.java.simpleName
@@ -425,19 +433,23 @@ object VideoTrimmerUtil {
     enablePreciseTrimming: Boolean,
     removeAudio: Boolean,
     speed: Double,
-    callback: VideoTrimListener
+    callback: VideoTrimListener,
+    texts: List<TextOverlayExport> = emptyList()
+
   ): TrimSession {
     val currentDate = Date()
     @SuppressLint("SimpleDateFormat")
     val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
     dateFormat.timeZone = TimeZone.getTimeZone("UTC")
     val formattedDateTime = dateFormat.format(currentDate)
-
+    val activeTexts = texts.filter {
+      it.endMs > startMs && it.startMs < endMs && File(it.pngPath).exists()
+    }
     val hasUserTransform = userRotationCount != 0 || userIsFlipped
     // Re-encode is required when: (1) user applied flip/rotate, (2) user cropped, or
     // (3) enablePreciseTrimming is on, or (4) speed != 1.0. In those cases, -c copy
     // won't work because either we need video filters or we need frame-accurate cut points.
-    val needsReEncode = hasUserTransform || cropNormalized != null || enablePreciseTrimming || speed != 1.0
+    val needsReEncode = hasUserTransform || cropNormalized != null || enablePreciseTrimming || speed != 1.0 || activeTexts.isNotEmpty()
 
     // FFmpeg reports progress in output time, so measure it against the length
     // of the clip being written, not the full source duration.
@@ -482,6 +494,7 @@ object VideoTrimmerUtil {
     if (userIsFlipped) {
       videoFilters.add("hflip")
     }
+    val preFilterCount = videoFilters.size
     // Convert normalized crop rect [0..1] to pixel coordinates in the post-rotation frame.
     if (cropNormalized != null && videoWidth > 0 && videoHeight > 0) {
       val postW: Int
@@ -512,22 +525,76 @@ object VideoTrimmerUtil {
 
     // Note: Android FFmpegKit auto-rotates by default, so no -noautorotate is needed.
     // The transpose filters above only handle user-initiated rotation, not source metadata.
+    // val buildCommand: (EncoderConfig) -> Array<String> = { config ->
+    //   // -y overwrites the output file without prompting. This is critical for the
+    //   // encoder fallback chain: the first (hardware) attempt opens/creates the output
+    //   // file before MediaCodec fails, so the software retry reuses the same path and
+    //   // would otherwise hit FFmpeg's interactive "Overwrite? [y/N]" prompt and abort.
+    //   val cmds = mutableListOf("-y", "-ss", "${startMs}ms", "-to", "${endMs}ms", "-i", inputFile)
+    //   // Per-attempt filter chain: the source-driven transforms plus, on the mpeg4
+    //   // software fallback only, a resolution cap so the output is decodable on-device.
+    //   val attemptFilters = videoFilters.toMutableList()
+    //   config.maxLongSide?.let { attemptFilters.add(capLongSideFilter(it)) }
+    //   // When enablePreciseTrimming is the only reason for re-encode (no transforms)
+    //   // and no cap applies, attemptFilters is empty — skip -vf entirely to avoid
+    //   // an FFmpeg error on an empty filter.
+    //   if (attemptFilters.isNotEmpty()) {
+    //     cmds.addAll(listOf("-vf", attemptFilters.joinToString(",")))
+    //   }
+    //   cmds.addAll(config.args)
+    //   when {
+    //     removeAudio -> cmds.add("-an")
+    //     speed != 1.0 -> cmds.addAll(listOf("-af", buildAtempoChain(speed)))
+    //     else -> cmds.addAll(listOf("-c:a", "copy"))
+    //   }
+    //   cmds.addAll(listOf("-metadata", "creation_time=$formattedDateTime", outputFile))
+    //   cmds.toTypedArray()
+    // }
+    val preFilters = videoFilters.take(preFilterCount)
+    val postFilters = videoFilters.drop(preFilterCount)
+    val clipSec = String.format(Locale.US, "%.3f", trimmedDurationMs / 1000.0)
+
     val buildCommand: (EncoderConfig) -> Array<String> = { config ->
-      // -y overwrites the output file without prompting. This is critical for the
-      // encoder fallback chain: the first (hardware) attempt opens/creates the output
-      // file before MediaCodec fails, so the software retry reuses the same path and
-      // would otherwise hit FFmpeg's interactive "Overwrite? [y/N]" prompt and abort.
       val cmds = mutableListOf("-y", "-ss", "${startMs}ms", "-to", "${endMs}ms", "-i", inputFile)
-      // Per-attempt filter chain: the source-driven transforms plus, on the mpeg4
-      // software fallback only, a resolution cap so the output is decodable on-device.
-      val attemptFilters = videoFilters.toMutableList()
-      config.maxLongSide?.let { attemptFilters.add(capLongSideFilter(it)) }
-      // When enablePreciseTrimming is the only reason for re-encode (no transforms)
-      // and no cap applies, attemptFilters is empty — skip -vf entirely to avoid
-      // an FFmpeg error on an empty filter.
-      if (attemptFilters.isNotEmpty()) {
-        cmds.addAll(listOf("-vf", attemptFilters.joinToString(",")))
+
+      if (activeTexts.isEmpty()) {
+        val attemptFilters = videoFilters.toMutableList()
+        config.maxLongSide?.let { attemptFilters.add(capLongSideFilter(it)) }
+        if (attemptFilters.isNotEmpty()) {
+          cmds.addAll(listOf("-vf", attemptFilters.joinToString(",")))
+        }
+      } else {
+        // One looped PNG input per text item, limited to the clip length.
+        for (t in activeTexts) {
+          cmds.addAll(listOf("-loop", "1", "-t", clipSec, "-i", t.pngPath))
+        }
+        val post = postFilters.toMutableList()
+        config.maxLongSide?.let { post.add(capLongSideFilter(it)) }
+
+        val graph = StringBuilder()
+        var label = "[0:v]"
+        if (preFilters.isNotEmpty()) {
+          graph.append("[0:v]").append(preFilters.joinToString(",")).append("[b0];")
+          label = "[b0]"
+        }
+        activeTexts.forEachIndexed { idx, t ->
+          val s = String.format(Locale.US, "%.3f", (t.startMs - startMs).coerceAtLeast(0L) / 1000.0)
+          val e = String.format(Locale.US, "%.3f", (t.endMs - startMs).coerceAtLeast(0L) / 1000.0)
+          val fx = String.format(Locale.US, "%.5f", t.cx)
+          val fy = String.format(Locale.US, "%.5f", t.cy)
+          val out = "[b${idx + 1}]"
+          graph.append(label)
+            .append("[${idx + 1}:v]overlay=x='main_w*$fx-overlay_w/2':y='main_h*$fy-overlay_h/2'")
+            .append(":enable='between(t,$s,$e)'")
+            .append(out).append(";")
+          label = out
+        }
+        graph.append(label)
+          .append(if (post.isNotEmpty()) post.joinToString(",") else "null")
+          .append("[vout]")
+        cmds.addAll(listOf("-filter_complex", graph.toString(), "-map", "[vout]", "-map", "0:a?"))
       }
+
       cmds.addAll(config.args)
       when {
         removeAudio -> cmds.add("-an")
