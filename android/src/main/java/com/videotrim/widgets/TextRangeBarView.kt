@@ -54,11 +54,11 @@ class TextRangeBarView(context: Context) : View(context) {
   private val playheadPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = Color.WHITE; strokeWidth = dp(2f)
   }
-  private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    color = Color.BLACK
-    textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 14f, resources.displayMetrics)
-    typeface = android.graphics.Typeface.DEFAULT_BOLD
-  }
+  private val labelPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+  color = Color.BLACK
+  textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 14f, resources.displayMetrics)
+  typeface = android.graphics.Typeface.DEFAULT_BOLD
+}
   private val timesPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     color = Color.argb(200, 255, 255, 255)
     textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 11f, resources.displayMetrics)

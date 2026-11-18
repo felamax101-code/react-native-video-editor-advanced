@@ -203,13 +203,7 @@ private data class TransformSnapshot(
   val cumulativeRotationDeg: Float,
   val texts: List<TextState> = emptyList()
 )
-  private data class TransformSnapshot(
-    val rotationCount: Int,
-    val isFlipped: Boolean,
-    val isCropActive: Boolean,
-    val cropNormalized: RectF?,
-    val cumulativeRotationDeg: Float
-  )
+  
   private val undoStack = mutableListOf<TransformSnapshot>()
   private val redoStack = mutableListOf<TransformSnapshot>()
   private var preCropSnapshot: TransformSnapshot? = null
@@ -2472,16 +2466,15 @@ private fun restoreTexts(states: List<TextState>) {
   // region Undo / Redo
 
   private fun currentSnapshot(): TransformSnapshot {
-    return TransformSnapshot(
-      rotationCount = rotationCount,
-      isFlipped = isFlipped,
-      isCropActive = isCropActive,
-      cropNormalized = getCropNormalizedRect(),
-      cumulativeRotationDeg = cumulativeRotationDeg,
-      cumulativeRotationDeg = cumulativeRotationDeg,
-texts = textOverlay?.snapshotStates() ?: emptyList()
-    )
-  }
+  return TransformSnapshot(
+    rotationCount = rotationCount,
+    isFlipped = isFlipped,
+    isCropActive = isCropActive,
+    cropNormalized = getCropNormalizedRect(),
+    cumulativeRotationDeg = cumulativeRotationDeg,
+    texts = textOverlay?.snapshotStates() ?: emptyList()
+  )
+}
 
   private fun pushUndo() {
     undoStack.add(currentSnapshot())
