@@ -847,13 +847,13 @@ private var committedTexts: List<TextState> = emptyList()
     cropOverlay?.onCropEnded = null
     cropOverlay?.onCropChanged = null
     cropOverlay = null
-    textOverlay?.onChanged = null
+   textOverlay?.onChanged = null
 textOverlay?.onSelectionChanged = null
+textOverlay?.onItemTap = null
+textOverlay = null
 textRangeBar?.onChanged = null
 textRangeBar?.onChanging = null
 textRangeBar = null
-    textOverlay = null
-    textOverlay?.onItemTap = null
     undoStack.clear()
     redoStack.clear()
     cumulativeRotationDeg = 0f

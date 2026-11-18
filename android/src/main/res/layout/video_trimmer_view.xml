@@ -294,7 +294,7 @@
   android:layout_marginHorizontal="16dp"
   android:visibility="gone" />
     <FrameLayout
-      android:id="@+id/trimmerView"
+      android:id="@+id/timingStackView"
       android:layout_width="match_parent"
       android:layout_height="50dp"
       android:layout_below="@+id/textRangeHolder"
