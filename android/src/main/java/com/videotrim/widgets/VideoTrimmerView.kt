@@ -62,6 +62,16 @@ import java.io.File
 import java.io.IOException
 import java.util.Locale
 
+
+import android.content.res.ColorStateList
+import android.text.TextUtils
+import android.view.ViewGroup
+import android.widget.HorizontalScrollView
+import android.widget.SeekBar
+import android.widget.Toast
+
+
+
 class VideoTrimmerView(
     context: ReactApplicationContext,
     config: ReadableMap?,

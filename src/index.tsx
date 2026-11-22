@@ -27,7 +27,7 @@ import type { EditorOptions } from './types';
 import { processColor } from 'react-native';
 
 // React Native runtime flags like nativeFabricUIManager are not in TypeScript types. Using `any` here is intentional and safe.
-const isFabric = !!(globalThis as any).nativeFabricUIManager;
+const isFabric = !!(global as any).nativeFabricUIManager;
 /**
  * The native module. Call the named functions ({@link showEditor},
  * {@link trim}, ...) for everything else; use the default export to subscribe

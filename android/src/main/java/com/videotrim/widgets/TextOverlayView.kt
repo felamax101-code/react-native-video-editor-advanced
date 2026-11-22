@@ -97,6 +97,7 @@ fun restoreStates(states: List<TextState>) {
   invalidate()
 }
   fun selectedItem(): TextItem? = items.firstOrNull { it.id == selectedId }
+  fun clearSelection() { select(-1L) }
 
   private fun select(id: Long) {
     if (selectedId == id) { invalidate(); return }
