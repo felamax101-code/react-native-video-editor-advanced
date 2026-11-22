@@ -236,7 +236,7 @@ class VideoTrimmerView(
     private lateinit var textRangeHolder: FrameLayout
     private var textRangeBar: TextRangeBarView? = null
     private var committedTexts: List<TextState> = emptyList()
-    private lateinit var songBtn: TextView
+    private lateinit var songBtn: ImageView
     internal val songs = mutableListOf<SongItem>()
     private var nextSongId = 1L
     var onAddSongRequested: (() -> Unit)? = null
@@ -1216,6 +1216,7 @@ applyVideoVolume()
         // Transform toolbar icons
         flipBtn.setColorFilter(iconColor, android.graphics.PorterDuff.Mode.SRC_IN)
         rotateBtn.setColorFilter(iconColor, android.graphics.PorterDuff.Mode.SRC_IN)
+        songBtn.setColorFilter(iconColor, android.graphics.PorterDuff.Mode.SRC_IN)
         cropBtn.setColorFilter(dimmedIconColor, android.graphics.PorterDuff.Mode.SRC_IN)
         undoBtn.setColorFilter(dimmedIconColor, android.graphics.PorterDuff.Mode.SRC_IN)
         redoBtn.setColorFilter(dimmedIconColor, android.graphics.PorterDuff.Mode.SRC_IN)

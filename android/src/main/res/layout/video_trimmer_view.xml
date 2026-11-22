@@ -112,17 +112,15 @@
         android:gravity="center"
         android:layout_marginStart="12dp"
         android:contentDescription="Text" />
-      <TextView
-        android:id="@+id/songBtn"
-        android:layout_width="wrap_content"
-        android:layout_height="22dp"
-        android:text="♪"
-        android:textColor="@android:color/white"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:gravity="center"
-        android:layout_marginStart="12dp"
-        android:contentDescription="Music" />
+      <ImageView
+  android:id="@+id/songBtn"
+  android:layout_width="22dp"
+  android:layout_height="22dp"
+  android:src="@drawable/music_note"
+  android:tint="@android:color/white"
+  android:scaleType="fitCenter"
+  android:layout_marginStart="12dp"
+  android:contentDescription="Music" />
     </LinearLayout>
 
     <View
