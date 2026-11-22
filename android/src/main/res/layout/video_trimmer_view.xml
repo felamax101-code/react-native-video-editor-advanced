@@ -105,13 +105,24 @@
         android:id="@+id/textBtn"
         android:layout_width="wrap_content"
         android:layout_height="22dp"
-        android:text="T"
+        android:text="Aa"
         android:textColor="@android:color/white"
         android:textSize="16sp"
         android:textStyle="bold"
         android:gravity="center"
         android:layout_marginStart="12dp"
         android:contentDescription="Text" />
+      <TextView
+        android:id="@+id/songBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="22dp"
+        android:text="♪"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginStart="12dp"
+        android:contentDescription="Music" />
     </LinearLayout>
 
     <View
@@ -294,10 +305,17 @@
       android:layout_marginHorizontal="16dp"
       android:visibility="gone" />
     <FrameLayout
+      android:id="@+id/songPanelHolder"
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:layout_below="@+id/textRangeHolder"
+      android:layout_marginHorizontal="16dp"
+      android:visibility="gone" />
+    <FrameLayout
       android:id="@+id/timingStackView"
       android:layout_width="match_parent"
       android:layout_height="50dp"
-      android:layout_below="@+id/textRangeHolder"
+      android:layout_below="@+id/songPanelHolder"
       android:layout_marginHorizontal="16dp"
       android:orientation="horizontal"
       android:visibility="visible">

@@ -422,6 +422,8 @@ export interface Spec extends TurboModule {
    * Android, paths outside the library's output directories resolve `false`.
    */
   deleteFile(filePath: string): Promise<boolean>;
+  /** Give the open editor a song file chosen in JS. */
+  addSong(path: string, title: string, durationMs: number): void;
   /** Programmatically close the editor if it is currently open. */
   closeEditor(): void;
   /** Check whether the given URL points to a valid audio or video file. */
@@ -501,6 +503,8 @@ export interface Spec extends TurboModule {
     bitrate: number;
     speed: number;
   }>;
+  /** Emitted when the user taps the music button in the editor. */
+  readonly onAddSongRequested: EventEmitter<void>;
   /** Emitted when loading, trimming or saving fails. */
   readonly onError: EventEmitter<{
     message: string;

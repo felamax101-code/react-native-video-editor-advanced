@@ -44,6 +44,25 @@ class TrimSession {
     currentSession?.cancel()
   }
 }
+/** One song as chosen in the editor. Times are absolute source times in ms. */
+class SongExport(
+  val path: String,
+  val srcStartMs: Long,
+  val srcEndMs: Long,
+  val videoStartMs: Long,
+  val volume: Float
+) {
+  val videoEndMs: Long get() = videoStartMs + (srcEndMs - srcStartMs)
+}
+
+/** A song clipped to the trim range: cut from the file, delayed relative to the clip start. */
+class SongSegment(
+  val path: String,
+  val srcStartMs: Long,
+  val srcEndMs: Long,
+  val delayMs: Long,
+  val volume: Float
+)
 /** One rendered text overlay. startMs/endMs are absolute source times; cx/cy are fractions of the post-rotate/flip frame. */
 class TextOverlayExport(
   val pngPath: String,
@@ -95,7 +114,41 @@ object VideoTrimmerUtil {
     if (speed.isNaN() || speed.isInfinite() || speed <= 0.0) return 1.0
     return speed.coerceIn(0.25, 4.0)
   }
+  private fun sec(ms: Long): String = String.format(Locale.US, "%.3f", ms / 1000.0)
 
+  /**
+   * Audio part of the filter graph. Song inputs start at [firstSongInput].
+   * A silent base track keeps the result exactly as long as the clip.
+   */
+  private fun buildAudioGraph(
+    firstSongInput: Int,
+    segs: List<SongSegment>,
+    originalVolume: Float,
+    useOriginal: Boolean,
+    clipSec: String,
+    speed: Double
+  ): String {
+    val fmt = "aformat=sample_rates=44100:channel_layouts=stereo"
+    val g = StringBuilder()
+    val labels = mutableListOf("[sil]")
+    g.append("anullsrc=r=44100:cl=stereo,atrim=duration=$clipSec[sil];")
+    if (useOriginal) {
+      g.append("[0:a]$fmt,volume=${String.format(Locale.US, "%.3f", originalVolume)}[ao];")
+      labels.add("[ao]")
+    }
+    segs.forEachIndexed { i, s ->
+      val idx = firstSongInput + i
+      g.append("[$idx:a]atrim=start=${sec(s.srcStartMs)}:end=${sec(s.srcEndMs)},")
+        .append("asetpts=PTS-STARTPTS,$fmt,")
+        .append("volume=${String.format(Locale.US, "%.3f", s.volume)},")
+        .append("adelay=${s.delayMs}|${s.delayMs}[s$i];")
+      labels.add("[s$i]")
+    }
+    g.append(labels.joinToString(""))
+      .append("amix=inputs=${labels.size}:duration=first:normalize=0[mix];")
+    g.append(if (speed != 1.0) "[mix]${buildAtempoChain(speed)}[aout]" else "[mix]anull[aout]")
+    return g.toString()
+  }
   internal fun buildAtempoChain(speed: Double): String {
     var remaining = sanitizeSpeed(speed)
     val filters = mutableListOf<String>()
@@ -434,7 +487,10 @@ object VideoTrimmerUtil {
     removeAudio: Boolean,
     speed: Double,
     callback: VideoTrimListener,
-    texts: List<TextOverlayExport> = emptyList()
+    texts: List<TextOverlayExport> = emptyList(),
+     songs: List<SongExport> = emptyList(),
+    originalVolume: Float = 1f,
+    hasAudio: Boolean = true
 
   ): TrimSession {
     val currentDate = Date()
@@ -445,11 +501,24 @@ object VideoTrimmerUtil {
     val activeTexts = texts.filter {
       it.endMs > startMs && it.startMs < endMs && File(it.pngPath).exists()
     }
+
+        val activeSongs = songs.mapNotNull { s ->
+      val effStart = maxOf(s.videoStartMs, startMs)
+      val effEnd = minOf(s.videoEndMs, endMs)
+      if (effEnd - effStart < 50L || !File(s.path).exists()) {
+        null
+      } else {
+        val srcS = s.srcStartMs + (effStart - s.videoStartMs)
+        SongSegment(s.path, srcS, srcS + (effEnd - effStart), effStart - startMs, s.volume)
+      }
+    }
+
+
     val hasUserTransform = userRotationCount != 0 || userIsFlipped
     // Re-encode is required when: (1) user applied flip/rotate, (2) user cropped, or
     // (3) enablePreciseTrimming is on, or (4) speed != 1.0. In those cases, -c copy
     // won't work because either we need video filters or we need frame-accurate cut points.
-    val needsReEncode = hasUserTransform || cropNormalized != null || enablePreciseTrimming || speed != 1.0 || activeTexts.isNotEmpty()
+    val needsReEncode = hasUserTransform || cropNormalized != null || enablePreciseTrimming || speed != 1.0 || activeTexts.isNotEmpty() || || activeSongs.isNotEmpty()
 
     // FFmpeg reports progress in output time, so measure it against the length
     // of the clip being written, not the full source duration.
@@ -553,20 +622,25 @@ object VideoTrimmerUtil {
     val preFilters = videoFilters.take(preFilterCount)
     val postFilters = videoFilters.drop(preFilterCount)
     val clipSec = String.format(Locale.US, "%.3f", trimmedDurationMs / 1000.0)
+    val useFilterComplex = activeTexts.isNotEmpty() || activeSongs.isNotEmpty()
+    val useOriginalAudio = hasAudio && !removeAudio
 
     val buildCommand: (EncoderConfig) -> Array<String> = { config ->
       val cmds = mutableListOf("-y", "-ss", "${startMs}ms", "-to", "${endMs}ms", "-i", inputFile)
 
-      if (activeTexts.isEmpty()) {
+      if (!useFilterComplex) {
         val attemptFilters = videoFilters.toMutableList()
         config.maxLongSide?.let { attemptFilters.add(capLongSideFilter(it)) }
         if (attemptFilters.isNotEmpty()) {
           cmds.addAll(listOf("-vf", attemptFilters.joinToString(",")))
         }
       } else {
-        // One looped PNG input per text item, limited to the clip length.
+        // Input order: 0 = video, then one looped PNG per text, then one file per song.
         for (t in activeTexts) {
           cmds.addAll(listOf("-loop", "1", "-t", clipSec, "-i", t.pngPath))
+        }
+        for (s in activeSongs) {
+          cmds.addAll(listOf("-i", s.path))
         }
         val post = postFilters.toMutableList()
         config.maxLongSide?.let { post.add(capLongSideFilter(it)) }
@@ -592,11 +666,27 @@ object VideoTrimmerUtil {
         graph.append(label)
           .append(if (post.isNotEmpty()) post.joinToString(",") else "null")
           .append("[vout]")
-        cmds.addAll(listOf("-filter_complex", graph.toString(), "-map", "[vout]", "-map", "0:a?"))
+
+        if (activeSongs.isNotEmpty()) {
+          graph.append(";").append(
+            buildAudioGraph(
+              firstSongInput = 1 + activeTexts.size,
+              segs = activeSongs,
+              originalVolume = originalVolume,
+              useOriginal = useOriginalAudio,
+              clipSec = clipSec,
+              speed = speed
+            )
+          )
+        }
+        cmds.addAll(listOf("-filter_complex", graph.toString(), "-map", "[vout]"))
+        if (activeSongs.isNotEmpty()) cmds.addAll(listOf("-map", "[aout]"))
+        else cmds.addAll(listOf("-map", "0:a?"))
       }
 
       cmds.addAll(config.args)
       when {
+        activeSongs.isNotEmpty() -> cmds.addAll(listOf("-c:a", "aac", "-b:a", "192k"))
         removeAudio -> cmds.add("-an")
         speed != 1.0 -> cmds.addAll(listOf("-af", buildAtempoChain(speed)))
         else -> cmds.addAll(listOf("-c:a", "copy"))
@@ -604,6 +694,7 @@ object VideoTrimmerUtil {
       cmds.addAll(listOf("-metadata", "creation_time=$formattedDateTime", outputFile))
       cmds.toTypedArray()
     }
+      
 
     return executeWithEncoderFallback(
       encoderConfigs = reEncodeEncoderConfigs(bitrateStr),

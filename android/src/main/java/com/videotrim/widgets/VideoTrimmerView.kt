@@ -14,6 +14,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.PlaybackParams
+import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -47,18 +48,19 @@ import com.videotrim.enums.ErrorCode
 import com.videotrim.interfaces.IVideoTrimmerView
 import com.videotrim.interfaces.VideoTrimListener
 import com.videotrim.utils.MediaMetadataUtil
+import com.videotrim.utils.SongExport
 import com.videotrim.utils.StorageUtil
+import com.videotrim.utils.TextBitmapRenderer
+import com.videotrim.utils.TextOverlayExport
 import com.videotrim.utils.VideoTrimmerUtil
 import com.videotrim.utils.VideoTrimmerUtil.RECYCLER_VIEW_PADDING
 import com.videotrim.utils.VideoTrimmerUtil.VIDEO_FRAMES_WIDTH
 import iknow.android.utils.DeviceUtil
 import iknow.android.utils.thread.BackgroundExecutor
 import iknow.android.utils.thread.UiThreadExecutor
+import java.io.File
 import java.io.IOException
 import java.util.Locale
-import java.io.File
-import com.videotrim.utils.TextBitmapRenderer
-import com.videotrim.utils.TextOverlayExport
 
 class VideoTrimmerView(
     context: ReactApplicationContext,
@@ -201,6 +203,7 @@ class VideoTrimmerView(
         val cropNormalized: RectF?,
         val cumulativeRotationDeg: Float,
         val texts: List<TextState> = emptyList(),
+        val songs: List<SongState> = emptyList(),
     )
 
     private val undoStack = mutableListOf<TransformSnapshot>()
@@ -223,6 +226,24 @@ class VideoTrimmerView(
     private lateinit var textRangeHolder: FrameLayout
     private var textRangeBar: TextRangeBarView? = null
     private var committedTexts: List<TextState> = emptyList()
+    private lateinit var songBtn: TextView
+    internal val songs = mutableListOf<SongItem>()
+    private var nextSongId = 1L
+    var onAddSongRequested: (() -> Unit)? = null
+    private lateinit var songPanelHolder: FrameLayout
+    private lateinit var songChipRow: LinearLayout
+    private lateinit var songBarRow: LinearLayout
+    private lateinit var songVolSeek: SeekBar
+    private lateinit var songVolLabel: TextView
+    private var songBar: SongRangeBarView? = null
+    private var selectedSongId = -1L
+    private var originalVolume = 1f
+    private var committedSongs: List<SongState> = emptyList()
+    private var songPanelKey = 0
+    private val songPlayers = HashMap<Long, MediaPlayer>()
+private val songReady = HashSet<Long>()
+private val songFailed = HashSet<Long>()
+private val songPlayerSpeed = HashMap<Long, Double>()
 
     internal var isMuted = false
         private set
@@ -264,6 +285,7 @@ class VideoTrimmerView(
         if (config != null) configure(config)
         setUpListeners()
         initTextTool()
+        initSongTool()
         initRangeDragDetector()
         setProgressIndicatorTouchListener()
     }
@@ -723,6 +745,7 @@ class VideoTrimmerView(
             player.start()
             applyPlaybackSpeed()
             startTimingRunnable()
+            syncSongs()
         }
         setPlayPauseViewIcon(player.isPlaying)
     }
@@ -740,7 +763,7 @@ class VideoTrimmerView(
         muteBtn.setImageResource(
             if (isMuted) R.drawable.speaker_slash_fill else R.drawable.speaker_wave_2_fill,
         )
-        mediaPlayer?.setVolume(if (isMuted) 0f else 1f, if (isMuted) 0f else 1f)
+applyVideoVolume()
         if (enableHapticFeedback) {
             performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY)
         }
@@ -783,6 +806,7 @@ class VideoTrimmerView(
         if (player.isPlaying) {
             player.pause()
         }
+        syncSongs()
         setPlayPauseViewIcon(false)
     }
 
@@ -823,6 +847,13 @@ class VideoTrimmerView(
                         ?.toLongOrNull() ?: 0L
             }
         val effectiveRemoveAudio = isMuted || configRemoveAudio
+        val hasAudio =
+            synchronized(retrieverLock) {
+                !retrieverReleased &&
+                    mediaMetadataRetriever?.extractMetadata(
+                        MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO,
+                    ) == "yes"
+            }
         trimSession =
             VideoTrimmerUtil.trim(
                 mSourceUri.toString(),
@@ -840,8 +871,10 @@ class VideoTrimmerView(
                 effectiveRemoveAudio,
                 speed,
                 mOnTrimVideoListener,
-                texts = buildTextExports()
-    
+                texts = buildTextExports(),
+                songs = buildSongExports(),
+                originalVolume = originalVolume,
+                hasAudio = hasAudio,
             )
     }
 
@@ -915,6 +948,7 @@ class VideoTrimmerView(
         cropOverlay?.onCropEnded = null
         cropOverlay?.onCropChanged = null
         cropOverlay = null
+
         textOverlay?.onChanged = null
         textOverlay?.onSelectionChanged = null
         textOverlay?.onItemTap = null
@@ -922,6 +956,12 @@ class VideoTrimmerView(
         textRangeBar?.onChanged = null
         textRangeBar?.onChanging = null
         textRangeBar = null
+
+                songBar?.onChanged = null
+        songBar = null
+        releaseAllSongPlayers()
+        onAddSongRequested = null
+
         undoStack.clear()
         redoStack.clear()
         cumulativeRotationDeg = 0f
@@ -1221,6 +1261,8 @@ class VideoTrimmerView(
         currentTimeText.text = formatTime(currentPosition)
         textOverlay?.setCurrentMs(currentPosition.toLong())
         textRangeBar?.setCurrentMs(currentPosition.toLong())
+        songBar?.setCurrentMs(currentPosition.toLong())
+        syncSongs()
         startTimeText.text = formatTime(startTime.toInt())
         endTimeText.text = formatTime(endTime.toInt())
 
@@ -2763,6 +2805,10 @@ class VideoTrimmerView(
     }
 
     private fun showTextBar(item: TextItem?) {
+        if (item != null && selectedSongId != -1L) {
+            selectedSongId = -1L
+            updateSongPanel()
+        }
         val bar = textRangeBar ?: return
         bar.item = item
         val target = if (item != null) android.view.View.VISIBLE else android.view.View.GONE
@@ -2791,6 +2837,14 @@ class VideoTrimmerView(
         committedTexts = states
     }
 
+    private fun buildSongExports(): List<SongExport> = songs.map { s ->
+        // Download libraries often return file:// URIs; FFmpeg needs a plain path.
+        val p =
+            if (s.path.startsWith("file://")) (android.net.Uri.parse(s.path).path ?: s.path)
+            else s.path
+        SongExport(p, s.srcStartMs, s.srcEndMs, s.videoStartMs, s.volume)
+    }
+
     private fun buildTextExports(): List<TextOverlayExport> {
         val overlay = textOverlay ?: return emptyList()
         if (overlay.items.isEmpty()) return emptyList()
@@ -2816,6 +2870,415 @@ class VideoTrimmerView(
         return result
     }
 
+    private fun initSongTool() {
+        songBtn = findViewById(R.id.songBtn)
+        songBtn.setOnClickListener {
+            onMediaPause()
+            onAddSongRequested?.invoke()
+        }
+
+        val d = mContext.resources.displayMetrics.density
+        fun px(v: Int) = (v * d).toInt()
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+
+        songPanelHolder = findViewById(R.id.songPanelHolder)
+        val column = LinearLayout(mContext)
+        column.orientation = LinearLayout.VERTICAL
+
+        val origRow = LinearLayout(mContext)
+        origRow.orientation = LinearLayout.HORIZONTAL
+        origRow.gravity = Gravity.CENTER_VERTICAL
+
+        val origLabel = TextView(mContext)
+        origLabel.textSize = 12f
+        origLabel.setTextColor(iconColor)
+        origLabel.text = "Video 100%"
+        origLabel.minWidth = px(76)
+        origRow.addView(origLabel, LinearLayout.LayoutParams(wrap, wrap))
+
+        val origSeek = SeekBar(mContext)
+        origSeek.max = 200
+        origSeek.progress = 100
+        origSeek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    originalVolume = p / 100f
+                    origLabel.text = "Video $p%"
+                          applyVideoVolume()
+
+                }
+
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            },
+        )
+        origRow.addView(origSeek, LinearLayout.LayoutParams(0, wrap, 1f))
+        column.addView(origRow, LinearLayout.LayoutParams(match, px(32)))
+
+        val chipScroll = HorizontalScrollView(mContext)
+        chipScroll.isHorizontalScrollBarEnabled = false
+        songChipRow = LinearLayout(mContext)
+        songChipRow.orientation = LinearLayout.HORIZONTAL
+        songChipRow.gravity = Gravity.CENTER_VERTICAL
+        chipScroll.addView(songChipRow, FrameLayout.LayoutParams(wrap, match))
+        column.addView(chipScroll, LinearLayout.LayoutParams(match, px(36)))
+
+        songBarRow = LinearLayout(mContext)
+        songBarRow.orientation = LinearLayout.VERTICAL
+        songBarRow.visibility = View.GONE
+
+        val bar = SongRangeBarView(mContext)
+        bar.rangeProvider = { startTime to endTime }
+        bar.othersProvider = { id -> songs.filter { it.id != id } }
+        bar.onChanged = { commitSongChange() }
+        songBarRow.addView(bar, LinearLayout.LayoutParams(match, px(44)))
+        songBar = bar
+
+        val volRow = LinearLayout(mContext)
+        volRow.orientation = LinearLayout.HORIZONTAL
+        volRow.gravity = Gravity.CENTER_VERTICAL
+
+        songVolLabel = TextView(mContext)
+        songVolLabel.textSize = 12f
+        songVolLabel.setTextColor(iconColor)
+        songVolLabel.text = "Vol 100%"
+        songVolLabel.minWidth = px(64)
+        volRow.addView(songVolLabel, LinearLayout.LayoutParams(wrap, wrap))
+
+        songVolSeek = SeekBar(mContext)
+        songVolSeek.max = 200
+        songVolSeek.progress = 100
+        songVolSeek.progressTintList = ColorStateList.valueOf(SongRangeBarView.ACCENT)
+        songVolSeek.thumbTintList = ColorStateList.valueOf(SongRangeBarView.ACCENT)
+        songVolSeek.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    selectedSong()?.volume = p / 100f
+                    songVolLabel.text = "Vol $p%"
+                }
+
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    commitSongChange()
+                }
+            },
+        )
+        volRow.addView(songVolSeek, LinearLayout.LayoutParams(0, wrap, 1f))
+
+        val removeBtn = TextView(mContext)
+        removeBtn.text = "Remove"
+        removeBtn.textSize = 13f
+        removeBtn.setTextColor(Color.parseColor("#FF6B6B"))
+        removeBtn.setPadding(px(12), px(6), px(4), px(6))
+        removeBtn.setOnClickListener { removeSelectedSong() }
+        volRow.addView(removeBtn, LinearLayout.LayoutParams(wrap, wrap))
+
+        songBarRow.addView(volRow, LinearLayout.LayoutParams(match, px(32)))
+        column.addView(songBarRow, LinearLayout.LayoutParams(match, wrap))
+        songPanelHolder.addView(column, FrameLayout.LayoutParams(match, wrap))
+    }
+
+    private fun selectedSong(): SongItem? = songs.firstOrNull { it.id == selectedSongId }
+
+    private fun selectSong(id: Long) {
+        if (id != -1L) textOverlay?.clearSelection()
+        selectedSongId = id
+        updateSongPanel()
+    }
+
+    private fun updateSongPanel() {
+        val s = selectedSong()
+        if (s == null) selectedSongId = -1L
+        songBar?.item = s
+        songBarRow.visibility = if (s != null) View.VISIBLE else View.GONE
+        if (s != null) {
+            val pct = Math.round(s.volume * 100)
+            songVolSeek.progress = pct
+            songVolLabel.text = "Vol $pct%"
+        }
+        songPanelHolder.visibility = if (songs.isNotEmpty()) View.VISIBLE else View.GONE
+        refreshSongChips()
+
+        val key = (if (songs.isNotEmpty()) 1 else 0) + (if (s != null) 2 else 0)
+        if (key != songPanelKey) {
+            songPanelKey = key
+            // The bottom panel changed height, so the video area changed too.
+            videoContainer.post { updateCropAllowedRect() }
+        }
+        applyVideoVolume()
+syncSongs()
+    }
+
+    private fun refreshSongChips() {
+        songChipRow.removeAllViews()
+        val d = mContext.resources.displayMetrics.density
+        for (s in songs) {
+            val selected = s.id == selectedSongId
+            val chip = TextView(mContext)
+            chip.text = s.title
+            chip.maxLines = 1
+            chip.ellipsize = TextUtils.TruncateAt.END
+            chip.maxWidth = (160 * d).toInt()
+            chip.textSize = 13f
+            chip.setPadding((12 * d).toInt(), (6 * d).toInt(), (12 * d).toInt(), (6 * d).toInt())
+            chip.setTextColor(if (selected) Color.BLACK else iconColor)
+            val bg = GradientDrawable()
+            bg.cornerRadius = 16 * d
+            if (selected) {
+                bg.setColor(SongRangeBarView.ACCENT)
+            } else {
+                bg.setColor(Color.TRANSPARENT)
+                bg.setStroke(maxOf(1, d.toInt()), dimmedIconColor)
+            }
+            chip.background = bg
+            chip.setOnClickListener { selectSong(if (selected) -1L else s.id) }
+            val lp =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            lp.marginEnd = (8 * d).toInt()
+            songChipRow.addView(chip, lp)
+        }
+    }
+
+    private fun removeSelectedSong() {
+        val s = selectedSong() ?: return
+        songs.remove(s)
+        selectedSongId = -1L
+        updateSongPanel()
+        commitSongChange()
+    }
+
+    /** Returns (start, maxEnd) of a free gap for a new song, preferring the playhead. */
+    private fun findSongSpot(pos: Long): Pair<Long, Long>? {
+        val min = SongRangeBarView.MIN_MS
+        val gaps = mutableListOf<Pair<Long, Long>>()
+        var cursor = startTime
+        for (s in songs.sortedBy { it.videoStartMs }) {
+            val sStart = s.videoStartMs.coerceIn(startTime, endTime)
+            if (sStart - cursor >= min) gaps.add(cursor to sStart)
+            cursor = maxOf(cursor, s.videoEndMs.coerceAtMost(endTime))
+        }
+        if (endTime - cursor >= min) gaps.add(cursor to endTime)
+
+        gaps
+            .firstOrNull { pos >= it.first && pos <= it.second - min }
+            ?.let {
+                return pos to it.second
+            }
+        gaps
+            .firstOrNull { it.first >= pos }
+            ?.let {
+                return it
+            }
+        return gaps.firstOrNull()
+    }
+
+    fun addSong(path: String, title: String, durationMs: Long) {
+        if (durationMs < SongRangeBarView.MIN_MS) {
+            Toast.makeText(mContext, "That song is too short", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
+        val spot = findSongSpot(pos)
+        if (spot == null) {
+            Toast.makeText(mContext, "No free space on the timeline for a song", Toast.LENGTH_SHORT)
+                .show()
+            return
+        }
+        val (start, maxEnd) = spot
+        val len = minOf(durationMs, maxEnd - start)
+        val item =
+            SongItem(
+                id = nextSongId++,
+                path = path,
+                title = title,
+                durationMs = durationMs,
+                srcStartMs = 0L,
+                srcEndMs = len,
+                videoStartMs = start,
+                volume = 1f,
+            )
+        songs.add(item)
+        selectedSongId = item.id
+        textOverlay?.clearSelection()
+        updateSongPanel()
+        commitSongChange()
+    }
+
+    private fun commitSongChange() {
+        val now = songs.map { it.toState() }.sortedBy { it.id }
+        if (now == committedSongs) return
+        undoStack.add(currentSnapshot().copy(songs = committedSongs))
+        redoStack.clear()
+        committedSongs = now
+        updateUndoRedoButtons()
+    }
+
+private fun createSongPlayer(s: SongItem): MediaPlayer? {
+  return try {
+    val p = MediaPlayer()
+    p.setAudioAttributes(
+      AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+        .build()
+    )
+    p.setDataSource(songFsPath(s))
+    p.setOnPreparedListener {
+      songReady.add(s.id)
+      syncSongs()
+    }
+    p.setOnErrorListener { _, _, _ ->
+      songReady.remove(s.id)
+      songFailed.add(s.id)
+      true
+    }
+    p.prepareAsync()
+    p
+  } catch (e: Exception) {
+    e.printStackTrace()
+    null
+  }
+}
+
+
+private fun releaseSongPlayer(p: MediaPlayer) {
+  try {
+    p.setOnPreparedListener(null)
+    p.setOnErrorListener(null)
+    p.release()
+  } catch (e: Exception) {
+    e.printStackTrace()
+  }
+}
+
+private fun releaseAllSongPlayers() {
+  for (p in songPlayers.values) releaseSongPlayer(p)
+  songPlayers.clear()
+  songReady.clear()
+  songFailed.clear()
+  songPlayerSpeed.clear()
+}
+
+private fun applySongSpeed(id: Long, p: MediaPlayer) {
+  try {
+    p.playbackParams = p.playbackParams.setSpeed(speed.toFloat())
+    songPlayerSpeed[id] = speed
+  } catch (e: Exception) {
+    // Some devices reject extreme speeds; the song then plays at normal speed.
+    songPlayerSpeed[id] = speed
+  }
+}
+private fun applyVideoVolume() {
+  val v = when {
+    isMuted -> 0f
+    songs.isNotEmpty() -> originalVolume.coerceIn(0f, 1f)
+    else -> 1f
+  }
+  try {
+    mediaPlayer?.setVolume(v, v)
+  } catch (e: Exception) {
+    e.printStackTrace()
+  }
+}
+
+
+/** Starts, pauses or re-seeks each song so it matches the video player. */
+private fun syncSongs() {
+  if (isDestroyed) return
+
+  // Release players of songs that no longer exist.
+  val ids = songs.map { it.id }.toSet()
+  val iter = songPlayers.entries.iterator()
+  while (iter.hasNext()) {
+    val e = iter.next()
+    if (e.key !in ids) {
+      releaseSongPlayer(e.value)
+      songReady.remove(e.key)
+      songFailed.remove(e.key)
+      songPlayerSpeed.remove(e.key)
+      iter.remove()
+    }
+  }
+
+val video = mediaPlayer
+  val playing = try { video?.isPlaying == true } catch (_: IllegalStateException) { false }
+  val pos = try { (video?.currentPosition ?: 0).toLong() } catch (_: IllegalStateException) { 0L }
+  for (s in songs) {
+    if (s.id in songFailed) continue
+    var p = songPlayers[s.id]
+    if (p == null) {
+      p = createSongPlayer(s)
+      if (p == null) { songFailed.add(s.id); continue }
+      songPlayers[s.id] = p
+    }
+
+     if (s.id !in songReady) continue
+
+    val shouldPlay = playing && pos >= s.videoStartMs && pos < s.videoEndMs && pos < endTime
+
+    try {
+      if (shouldPlay) {
+        val target = (s.srcStartMs + (pos - s.videoStartMs)).toInt()
+        val vol = s.volume.coerceIn(0f, 1f)
+        p.setVolume(vol, vol)
+        if (!p.isPlaying) {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            p.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+          } else {
+            p.seekTo(target)
+          }
+          p.start()
+          applySongSpeed(s.id, p)
+        } else {
+          if (songPlayerSpeed[s.id] != speed) applySongSpeed(s.id, p)
+          if (kotlin.math.abs(p.currentPosition - target) > 150) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              p.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+            } else {
+              p.seekTo(target)
+            }
+          }
+        }
+      } else if (p.isPlaying) {
+        p.pause()
+      }
+    } catch (e: IllegalStateException) {
+      e.printStackTrace()
+      songFailed.add(s.id)
+    }
+  }
+}
+
+private fun songFsPath(s: SongItem): String =
+  if (s.path.startsWith("file://")) (android.net.Uri.parse(s.path).path ?: s.path) else s.path
+
+    private fun restoreSongs(states: List<SongState>) {
+        songs.clear()
+        for (s in states) {
+            songs.add(
+                SongItem(
+                    s.id,
+                    s.path,
+                    s.title,
+                    s.durationMs,
+                    s.srcStartMs,
+                    s.srcEndMs,
+                    s.videoStartMs,
+                    s.volume,
+                ),
+            )
+        }
+        committedSongs = states
+        updateSongPanel()
+    }
+
     // region Undo / Redo
 
     private fun currentSnapshot(): TransformSnapshot {
@@ -2826,6 +3289,7 @@ class VideoTrimmerView(
             cropNormalized = getCropNormalizedRect(),
             cumulativeRotationDeg = cumulativeRotationDeg,
             texts = textOverlay?.snapshotStates() ?: emptyList(),
+            songs = songs.map { it.toState() }.sortedBy { it.id },
         )
     }
 
@@ -2853,6 +3317,7 @@ class VideoTrimmerView(
 
     private fun applySnapshot(snap: TransformSnapshot) {
         restoreTexts(snap.texts)
+        restoreSongs(snap.songs)
         val flipChanging = isFlipped != snap.isFlipped
         val prevRotationCount = rotationCount
 

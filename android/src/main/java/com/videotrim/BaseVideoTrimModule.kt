@@ -212,6 +212,7 @@ open class BaseVideoTrimModule internal constructor(
     UiThreadUtil.runOnUiThread {
       trimmerView = VideoTrimmerView(reactApplicationContext, editorConfig, null)
       trimmerView?.setOnTrimVideoListener(this)
+      trimmerView?.onAddSongRequested = { sendEvent("onAddSongRequested", null) }
       trimmerView?.initByURI(filePath.toUri())
 
       val builder = AlertDialog.Builder(
@@ -615,6 +616,11 @@ open class BaseVideoTrimModule internal constructor(
   fun deleteFile(filePath: String, promise: Promise) {
     promise.resolve(StorageUtil.deleteFile(filePath))
   }
+  fun addSong(path: String, title: String, durationMs: Double) {
+  UiThreadUtil.runOnUiThread {
+    trimmerView?.addSong(path, title, durationMs.toLong())
+  }
+}
 
   fun closeEditor() {
     hideDialog(true)

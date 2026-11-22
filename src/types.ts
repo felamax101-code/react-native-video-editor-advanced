@@ -128,6 +128,8 @@ export interface VideoTrimEventMap {
   onShow: void;
   /** The editor was dismissed. */
   onHide: void;
+  /** The user tapped the music button; show your song picker. */
+  onAddSongRequested: void;
   /** The media finished loading in the editor. */
   onLoad: LoadEvent;
   /** The user confirmed and trimming started. */

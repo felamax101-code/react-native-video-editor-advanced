@@ -27,7 +27,7 @@ import type { EditorOptions } from './types';
 import { processColor } from 'react-native';
 
 // React Native runtime flags like nativeFabricUIManager are not in TypeScript types. Using `any` here is intentional and safe.
-const isFabric = !!(global as any).nativeFabricUIManager;
+const isFabric = !!(globalThis as any).nativeFabricUIManager;
 /**
  * The native module. Call the named functions ({@link showEditor},
  * {@link trim}, ...) for everything else; use the default export to subscribe
@@ -323,7 +323,12 @@ export function deleteFile(filePath: string): Promise<boolean> {
   }
   return VideoTrim.deleteFile(filePath);
 }
-
+/**
+ * Give the open editor a song. Call this after the user picks one from your own picker.
+ */
+export function addSong(path: string, title: string, durationMs: number): void {
+  return VideoTrim.addSong(path, title, durationMs);
+}
 /**
  * Close the editor if it is open.
  */

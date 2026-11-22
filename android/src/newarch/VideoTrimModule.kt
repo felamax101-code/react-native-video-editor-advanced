@@ -28,12 +28,17 @@ class VideoTrimModule(
         "onStatistics" -> emitOnStatistics(params)
         "onError" -> emitOnError(params)
         "onLoad" -> emitOnLoad(params)
+        "onAddSongRequested" -> emitOnAddSongRequested()
         // default case to handle unexpected event names
         else -> {
           Log.d(NAME, "Unknown event: $eventName")
         }
       }
   }
+
+  override fun addSong(path: String, title: String, durationMs: Double) {
+  base.addSong(path, title, durationMs)
+}
 
   override fun showEditor(
     filePath: String,
