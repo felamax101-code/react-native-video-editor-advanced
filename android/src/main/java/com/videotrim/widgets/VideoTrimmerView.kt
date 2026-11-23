@@ -339,6 +339,7 @@ private val songPlayerSpeed = HashMap<Long, Double>()
         loadingIndicator = findViewById(R.id.loadingIndicator)
         saveBtn = findViewById(R.id.saveBtn)
         cancelBtn = findViewById(R.id.cancelBtn)
+        songBtn = findViewById(R.id.songBtn)
         audioBannerView = findViewById(R.id.audioBannerView)
         failToLoadBtn = findViewById(R.id.failToLoadBtn)
 
@@ -2882,7 +2883,6 @@ applyVideoVolume()
     }
 
     private fun initSongTool() {
-        songBtn = findViewById(R.id.songBtn)
         songBtn.setOnClickListener {
             onMediaPause()
             onAddSongRequested?.invoke()
